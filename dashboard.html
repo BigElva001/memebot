@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Signal Terminal — Paper Mode</title>
+<style>
+  :root {
+    --bg: #0a0e0c;
+    --panel: #101512;
+    --line: #1e2822;
+    --text: #d7e4dc;
+    --dim: #6b8577;
+    --green: #4fd68c;
+    --red: #ec6f5e;
+    --amber: #d6a24f;
+    --mono: "IBM Plex Mono", "SF Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--mono);
+    margin: 0;
+    padding: 0;
+    min-height: 100vh;
+  }
+  .banner {
+    background: linear-gradient(90deg, #16241c, #0a0e0c);
+    border-bottom: 1px solid var(--line);
+    padding: 14px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .banner .title {
+    font-size: 15px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--dim);
+  }
+  .banner .title b { color: var(--green); }
+  .demo-tag {
+    border: 1px solid var(--amber);
+    color: var(--amber);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    padding: 4px 10px;
+    border-radius: 3px;
+    text-transform: uppercase;
+  }
+  main {
+    max-width: 1000px;
+    margin: 0 auto;
+    padding: 24px;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 14px;
+    margin-bottom: 20px;
+  }
+  @media (max-width: 700px) {
+    .grid { grid-template-columns: 1fr; }
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 16px 18px;
+  }
+  .card .label {
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--dim);
+    margin-bottom: 8px;
+  }
+  .card .value {
+    font-size: 24px;
+    font-weight: 600;
+  }
+  .value.pos { color: var(--green); }
+  .value.neg { color: var(--red); }
+  section {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    margin-bottom: 16px;
+    overflow: hidden;
+  }
+  section h2 {
+    font-size: 12px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--dim);
+    padding: 12px 18px;
+    margin: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  th {
+    text-align: left;
+    color: var(--dim);
+    font-weight: 400;
+    padding: 8px 18px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    border-bottom: 1px solid var(--line);
+  }
+  td {
+    padding: 9px 18px;
+    border-bottom: 1px solid var(--line);
+  }
+  tr:last-child td { border-bottom: none; }
+  .buy { color: var(--green); }
+  .sell { color: var(--red); }
+  .empty-row td {
+    color: var(--dim);
+    text-align: center;
+    padding: 24px;
+    font-style: italic;
+  }
+  .pnl-pos { color: var(--green); }
+  .pnl-neg { color: var(--red); }
+  footer {
+    text-align: center;
+    color: var(--dim);
+    font-size: 11px;
+    padding: 20px;
+  }
+  .pulse {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--green);
+    margin-right: 6px;
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+</style>
+</head>
+<body>
+
+<div class="banner">
+  <div class="title"><span class="pulse"></span>SIGNAL TERMINAL — <b>MEMECOIN SCANNER</b></div>
+  <div class="demo-tag">Demo funds only — no real money</div>
+</div>
+
+<main>
+  <div class="grid">
+    <div class="card">
+      <div class="label">Realized P&L today</div>
+      <div class="value" id="pnl">—</div>
+    </div>
+    <div class="card">
+      <div class="label">Open positions</div>
+      <div class="value" id="positions">—</div>
+    </div>
+    <div class="card">
+      <div class="label">Last scan</div>
+      <div class="value" id="lastrun" style="font-size:15px;">—</div>
+    </div>
+  </div>
+
+  <section>
+    <h2>Open positions</h2>
+    <table>
+      <thead><tr><th>Symbol</th><th>Entry price</th><th>Size</th></tr></thead>
+      <tbody id="positions-body"><tr class="empty-row"><td colspan="3">No open positions yet</td></tr></tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Recent trades</h2>
+    <table>
+      <thead><tr><th>Time</th><th>Action</th><th>Symbol</th><th>Price</th><th>Size</th><th>P&L</th><th>Reason</th></tr></thead>
+      <tbody id="trades-body"><tr class="empty-row"><td colspan="7">No trades yet — bot is scanning</td></tr></tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Active thresholds</h2>
+    <table>
+      <tbody id="config-body"></tbody>
+    </table>
+  </section>
+</main>
+
+<footer id="status-footer">connecting…</footer>
+
+<script>
+async function refresh() {
+  try {
+    const res = await fetch('/api/state');
+    const data = await res.json();
+
+    const pnl = data.portfolio.realized_pnl_today;
+    const pnlEl = document.getElementById('pnl');
+    pnlEl.textContent = (pnl >= 0 ? '+$' : '-$') + Math.abs(pnl).toFixed(2);
+    pnlEl.className = 'value ' + (pnl >= 0 ? 'pos' : 'neg');
+
+    document.getElementById('positions').textContent =
+      data.portfolio.open_positions.length + ' / ' + data.portfolio.max_open_positions;
+
+    document.getElementById('lastrun').textContent = data.status.last_run || 'starting…';
+
+    const posBody = document.getElementById('positions-body');
+    if (data.portfolio.open_positions.length === 0) {
+      posBody.innerHTML = '<tr class="empty-row"><td colspan="3">No open positions yet</td></tr>';
+    } else {
+      posBody.innerHTML = data.portfolio.open_positions.map(p =>
+        `<tr><td>${p.symbol}</td><td>$${p.entry_price_usd.toFixed(6)}</td><td>$${p.size_usd}</td></tr>`
+      ).join('');
+    }
+
+    const tradesBody = document.getElementById('trades-body');
+    if (data.recent_trades.length === 0) {
+      tradesBody.innerHTML = '<tr class="empty-row"><td colspan="7">No trades yet — bot is scanning</td></tr>';
+    } else {
+      tradesBody.innerHTML = data.recent_trades.map(t => {
+        const pnlNum = parseFloat(t.pnl_usd || 0);
+        const pnlClass = pnlNum > 0 ? 'pnl-pos' : (pnlNum < 0 ? 'pnl-neg' : '');
+        return `<tr>
+          <td>${t.timestamp}</td>
+          <td class="${t.action === 'BUY' ? 'buy' : 'sell'}">${t.action}</td>
+          <td>${t.symbol}</td>
+          <td>$${parseFloat(t.price_usd).toFixed(6)}</td>
+          <td>$${parseFloat(t.size_usd).toFixed(2)}</td>
+          <td class="${pnlClass}">${pnlNum ? (pnlNum >= 0 ? '+' : '') + pnlNum.toFixed(2) : '—'}</td>
+          <td>${t.reason}</td>
+        </tr>`;
+      }).join('');
+    }
+
+    const cfg = data.config;
+    document.getElementById('config-body').innerHTML = `
+      <tr><td>Position size</td><td>$${cfg.position_size_usd}</td></tr>
+      <tr><td>Stop-loss</td><td>${(cfg.stop_loss_pct*100).toFixed(0)}%</td></tr>
+      <tr><td>Take-profit</td><td>${(cfg.take_profit_pct*100).toFixed(0)}%</td></tr>
+      <tr><td>Min liquidity</td><td>$${cfg.min_liquidity_usd.toLocaleString()}</td></tr>
+    `;
+
+    document.getElementById('status-footer').textContent =
+      data.status.last_error ? ('last error: ' + data.status.last_error) : 'paper mode · real prices · demo funds only';
+  } catch (e) {
+    document.getElementById('status-footer').textContent = 'connection lost — retrying…';
+  }
+}
+
+refresh();
+setInterval(refresh, 5000);
+</script>
+
+</body>
+</html>
