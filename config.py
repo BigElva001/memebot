@@ -62,6 +62,7 @@ MIN_BUY_SELL_RATIO = 1.2       # more buys than sells = net accumulation
 MIN_VOLUME_H1_USD = 5000
 
 # ── RISK CONTROLS (non-negotiable — the bot will refuse to trade past these) ──
+STARTING_BALANCE_SOL = 2.0      # demo wallet balance shown on the dashboard
 POSITION_SIZE_USD = 25          # fixed $ per trade — keep this small
 MAX_OPEN_POSITIONS = 5
 MAX_DAILY_LOSS_USD = 100        # bot halts new buys for the day once hit
