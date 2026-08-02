@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Signal Terminal — Paper Mode</title>
+<style>
+  :root {
+    --bg: #0a0e0c;
+    --panel: #101512;
+    --line: #1e2822;
+    --text: #d7e4dc;
+    --dim: #6b8577;
+    --green: #4fd68c;
+    --red: #ec6f5e;
+    --amber: #d6a24f;
+    --mono: "IBM Plex Mono", "SF Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--mono);
+    margin: 0;
+    padding: 0;
+    min-height: 100vh;
+  }
+  .banner {
+    background: linear-gradient(90deg, #16241c, #0a0e0c);
+    border-bottom: 1px solid var(--line);
+    padding: 14px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .banner .title {
+    font-size: 15px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--dim);
+  }
+  .banner .title b { color: var(--green); }
+  .demo-tag {
+    border: 1px solid var(--amber);
+    color: var(--amber);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    padding: 4px 10px;
+    border-radius: 3px;
+    text-transform: uppercase;
+  }
+  main {
+    max-width: 1000px;
+    margin: 0 auto;
+    padding: 24px;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 14px;
+    margin-bottom: 20px;
+  }
+  @media (max-width: 700px) {
+    .grid { grid-template-columns: 1fr; }
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 16px 18px;
+  }
+  .card .label {
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--dim);
+    margin-bottom: 8px;
+  }
+  .card .value {
+    font-size: 24px;
+    font-weight: 600;
+  }
+  .value.pos { color: var(--green); }
+  .value.neg { color: var(--red); }
+  section {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    margin-bottom: 16px;
+    overflow: hidden;
+  }
+  section h2 {
+    font-size: 12px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--dim);
+    padding: 12px 18px;
+    margin: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  th {
+    text-align: left;
+    color: var(--dim);
+    font-weight: 400;
+    padding: 8px 18px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    border-bottom: 1px solid var(--line);
+  }
+  td {
+    padding: 9px 18px;
+    border-bottom: 1px solid var(--line);
+  }
+  tr:last-child td { border-bottom: none; }
+  .buy { color: var(--green); }
+  .sell { color: var(--red); }
+  .empty-row td {
+    color: var(--dim);
+    text-align: center;
+    padding: 24px;
+    font-style: italic;
+  }
+  .pnl-pos { color: var(--green); }
+  .pnl-neg { color: var(--red); }
+  footer {
+    text-align: center;
+    color: var(--dim);
+    font-size: 11px;
+    padding: 20px;
+  }
+  .pulse {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--green);
+    margin-right: 6px;
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+</style>
+</head>
+<body>
+
+<div class="banner">
+  <div class="title"><span class="pulse"></span>SIGNAL TERMINAL — <b>MEMECOIN SCANNER</b></div>
+  <div class="demo-tag">Demo funds only — no real money</div>
+</div>
+
+<main>
+  <div class="grid">
+    <div class="card">
+      <div class="label">Balance</div>
+      <div class="value" id="balance">—</div>
+    </div>
+    <div class="card">
+      <div class="label">Realized P&L today</div>
+      <div class="value" id="pnl">—</div>
+    </div>
+    <div class="card">
+      <div class="label">Open positions</div>
+      <div class="value" id="positions">—</div>
+    </div>
+    <div class="card">
+      <div class="label">Last scan</div>
+      <div class="value" id="lastrun" style="font-size:15px;">—</div>
+    </div>
+  </div>
+
+  <section>
+    <h2>Manual trade</h2>
+    <div style="padding: 16px 18px; display:flex; flex-direction:column; gap:12px;">
+      <div style="display:flex; gap:10px; flex-wrap:wrap;">
+        <input id="manual-mint" type="text" placeholder="Paste a Solana token address (mint)"
+          style="flex:2; min-width:220px; background:#0a0e0c; border:1px solid var(--line); border-radius:3px; color:var(--text); font-family:var(--mono); padding:9px 12px; font-size:13px;">
+        <button id="manual-chart-btn" onclick="showChartForInput()"
+          style="background:transparent; border:1px solid var(--dim); color:var(--dim); padding:9px 16px; border-radius:3px; font-family:var(--mono); font-size:12px; text-transform:uppercase; cursor:pointer;">
+          Chart
+        </button>
+      </div>
+      <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+        <label style="font-size:11px; color:var(--dim); text-transform:uppercase;">Amount ($)
+          <input id="manual-amount" type="number" min="1" step="1" value="25"
+            style="display:block; width:100px; margin-top:4px; background:#0a0e0c; border:1px solid var(--line); border-radius:3px; color:var(--text); font-family:var(--mono); padding:8px 10px; font-size:13px;">
+        </label>
+        <label style="font-size:11px; color:var(--dim); text-transform:uppercase;">Stop-loss (%)
+          <input id="manual-sl" type="number" min="1" max="95" placeholder="20"
+            style="display:block; width:90px; margin-top:4px; background:#0a0e0c; border:1px solid var(--line); border-radius:3px; color:var(--text); font-family:var(--mono); padding:8px 10px; font-size:13px;">
+        </label>
+        <label style="font-size:11px; color:var(--dim); text-transform:uppercase;">Take-profit (%)
+          <input id="manual-tp" type="number" min="1" max="95" placeholder="50"
+            style="display:block; width:90px; margin-top:4px; background:#0a0e0c; border:1px solid var(--line); border-radius:3px; color:var(--text); font-family:var(--mono); padding:8px 10px; font-size:13px;">
+        </label>
+        <button id="manual-buy-btn" onclick="manualBuy()"
+          style="align-self:flex-end; background:transparent; border:1px solid var(--green); color:var(--green); padding:9px 20px; border-radius:3px; font-family:var(--mono); font-size:12px; letter-spacing:0.05em; text-transform:uppercase; cursor:pointer;">
+          Buy
+        </button>
+      </div>
+    </div>
+    <div id="manual-msg" style="padding: 0 18px 14px; font-size:12px; color:var(--dim);"></div>
+  </section>
+
+  <section>
+    <h2>Portfolio value over time</h2>
+    <div style="padding: 14px 18px;">
+      <canvas id="equity-canvas" style="width:100%; height:180px;"></canvas>
+      <div id="equity-empty" style="color:var(--dim); font-style:italic; font-size:13px; display:none;">Not enough history yet — check back after a few scan cycles</div>
+    </div>
+  </section>
+
+  <section id="chart-section" style="display:none;">
+    <h2 id="chart-title">Chart</h2>
+    <div style="padding: 14px 18px;">
+      <iframe id="chart-frame" style="width:100%; height:420px; border:1px solid var(--line); border-radius:4px;" src="about:blank"></iframe>
+    </div>
+  </section>
+
+  <section>
+    <h2>Open positions</h2>
+    <table>
+      <thead><tr><th>Symbol</th><th>Entry price</th><th>Size</th><th>SL / TP</th><th></th></tr></thead>
+      <tbody id="positions-body"><tr class="empty-row"><td colspan="5">No open positions yet</td></tr></tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Recent trades</h2>
+    <table>
+      <thead><tr><th>Time</th><th>Action</th><th>Symbol</th><th>Price</th><th>Size</th><th>P&L</th><th>Reason</th></tr></thead>
+      <tbody id="trades-body"><tr class="empty-row"><td colspan="7">No trades yet — bot is scanning</td></tr></tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Active thresholds</h2>
+    <table>
+      <tbody id="config-body"></tbody>
+    </table>
+  </section>
+</main>
+
+<footer id="status-footer">connecting…</footer>
+
+<script>
+async function refresh() {
+  try {
+    const res = await fetch('/api/state');
+    const data = await res.json();
+
+    document.getElementById('balance').textContent =
+      '$' + data.portfolio.cash_balance_usd.toFixed(2);
+
+    const pnl = data.portfolio.realized_pnl_today;
+    const pnlEl = document.getElementById('pnl');
+    pnlEl.textContent = (pnl >= 0 ? '+$' : '-$') + Math.abs(pnl).toFixed(2);
+    pnlEl.className = 'value ' + (pnl >= 0 ? 'pos' : 'neg');
+
+    document.getElementById('positions').textContent =
+      data.portfolio.open_positions.length + ' / ' + data.portfolio.max_open_positions;
+
+    document.getElementById('lastrun').textContent = data.status.last_run || 'starting…';
+
+    const posBody = document.getElementById('positions-body');
+    if (data.portfolio.open_positions.length === 0) {
+      posBody.innerHTML = '<tr class="empty-row"><td colspan="5">No open positions yet</td></tr>';
+    } else {
+      posBody.innerHTML = data.portfolio.open_positions.map(p =>
+        `<tr>
+          <td>${p.symbol}</td>
+          <td>$${p.entry_price_usd.toFixed(6)}</td>
+          <td>$${p.size_usd}</td>
+          <td>-${(p.stop_loss_pct*100).toFixed(0)}% / +${(p.take_profit_pct*100).toFixed(0)}%</td>
+          <td style="display:flex; gap:6px;">
+            <button onclick="showChart('${p.mint}')"
+              style="background:transparent; border:1px solid var(--dim); color:var(--dim); padding:5px 10px; border-radius:3px; font-family:var(--mono); font-size:11px; text-transform:uppercase; cursor:pointer;">Chart</button>
+            <button onclick="manualSell('${p.symbol}')"
+              style="background:transparent; border:1px solid var(--red); color:var(--red); padding:5px 12px; border-radius:3px; font-family:var(--mono); font-size:11px; text-transform:uppercase; cursor:pointer;">Sell</button>
+          </td>
+        </tr>`
+      ).join('');
+    }
+
+    const tradesBody = document.getElementById('trades-body');
+    if (data.recent_trades.length === 0) {
+      tradesBody.innerHTML = '<tr class="empty-row"><td colspan="7">No trades yet — bot is scanning</td></tr>';
+    } else {
+      tradesBody.innerHTML = data.recent_trades.map(t => {
+        const pnlNum = parseFloat(t.pnl_usd || 0);
+        const pnlClass = pnlNum > 0 ? 'pnl-pos' : (pnlNum < 0 ? 'pnl-neg' : '');
+        return `<tr>
+          <td>${t.timestamp}</td>
+          <td class="${t.action === 'BUY' ? 'buy' : 'sell'}">${t.action}</td>
+          <td>${t.symbol}</td>
+          <td>$${parseFloat(t.price_usd).toFixed(6)}</td>
+          <td>$${parseFloat(t.size_usd).toFixed(2)}</td>
+          <td class="${pnlClass}">${pnlNum ? (pnlNum >= 0 ? '+' : '') + pnlNum.toFixed(2) : '—'}</td>
+          <td>${t.reason}</td>
+        </tr>`;
+      }).join('');
+    }
+
+    const cfg = data.config;
+    document.getElementById('config-body').innerHTML = `
+      <tr><td>Position size</td><td>$${cfg.position_size_usd}</td></tr>
+      <tr><td>Stop-loss</td><td>${(cfg.stop_loss_pct*100).toFixed(0)}%</td></tr>
+      <tr><td>Take-profit</td><td>${(cfg.take_profit_pct*100).toFixed(0)}%</td></tr>
+      <tr><td>Min liquidity</td><td>$${cfg.min_liquidity_usd.toLocaleString()}</td></tr>
+    `;
+
+    document.getElementById('status-footer').textContent =
+      data.status.last_error ? ('last error: ' + data.status.last_error) : 'paper mode · real prices · demo funds only';
+  } catch (e) {
+    document.getElementById('status-footer').textContent = 'connection lost — retrying…';
+  }
+}
+
+async function manualBuy() {
+  const mintInput = document.getElementById('manual-mint');
+  const amountInput = document.getElementById('manual-amount');
+  const slInput = document.getElementById('manual-sl');
+  const tpInput = document.getElementById('manual-tp');
+  const msg = document.getElementById('manual-msg');
+
+  const mint = mintInput.value.trim();
+  if (!mint) { msg.textContent = 'Paste a token address first.'; return; }
+
+  const amount_usd = parseFloat(amountInput.value) || 25;
+  const stop_loss_pct = slInput.value ? parseFloat(slInput.value) : null;
+  const take_profit_pct = tpInput.value ? parseFloat(tpInput.value) : null;
+
+  msg.textContent = 'Buying…';
+  try {
+    const res = await fetch('/api/manual_buy', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({mint, amount_usd, stop_loss_pct, take_profit_pct})
+    });
+    const data = await res.json();
+    if (data.ok) {
+      msg.textContent = `Bought ${data.symbol} @ $${data.price_usd.toFixed(6)} for $${amount_usd}`;
+      mintInput.value = '';
+    } else {
+      msg.textContent = 'Not executed: ' + (data.reason || data.error);
+    }
+  } catch (e) {
+    msg.textContent = 'Error placing trade.';
+  }
+  refresh();
+}
+
+async function manualSell(symbol) {
+  const msg = document.getElementById('manual-msg');
+  msg.textContent = `Selling ${symbol}…`;
+  try {
+    const res = await fetch('/api/manual_sell', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({symbol})
+    });
+    const data = await res.json();
+    if (data.ok) {
+      msg.textContent = `Sold ${symbol} @ $${data.price_usd.toFixed(6)}`;
+    } else {
+      msg.textContent = 'Not executed: ' + (data.reason || data.error);
+    }
+  } catch (e) {
+    msg.textContent = 'Error placing trade.';
+  }
+  refresh();
+}
+
+async function showChart(mint) {
+  const section = document.getElementById('chart-section');
+  const frame = document.getElementById('chart-frame');
+  const title = document.getElementById('chart-title');
+  section.style.display = 'block';
+  title.textContent = 'Loading chart…';
+  section.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+
+  try {
+    const res = await fetch('/api/chart?mint=' + encodeURIComponent(mint));
+    const data = await res.json();
+    if (data.ok) {
+      frame.src = data.embed_url;
+      title.textContent = 'Chart — ' + data.symbol;
+    } else {
+      title.textContent = 'Chart unavailable: ' + (data.error || 'unknown error');
+      frame.src = 'about:blank';
+    }
+  } catch (e) {
+    title.textContent = 'Chart unavailable — connection error';
+  }
+}
+
+function showChartForInput() {
+  const mint = document.getElementById('manual-mint').value.trim();
+  if (!mint) {
+    document.getElementById('manual-msg').textContent = 'Paste a token address to view its chart.';
+    return;
+  }
+  showChart(mint);
+}
+
+async function drawEquityChart() {
+  const canvas = document.getElementById('equity-canvas');
+  const emptyMsg = document.getElementById('equity-empty');
+  try {
+    const res = await fetch('/api/equity_history');
+    const data = await res.json();
+    const points = data.history || [];
+
+    if (points.length < 2) {
+      canvas.style.display = 'none';
+      emptyMsg.style.display = 'block';
+      return;
+    }
+    canvas.style.display = 'block';
+    emptyMsg.style.display = 'none';
+
+    const dpr = window.devicePixelRatio || 1;
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    const ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, w, h);
+
+    const values = points.map(p => p.equity);
+    const min = Math.min(...values), max = Math.max(...values);
+    const range = (max - min) || 1;
+    const pad = 10;
+
+    const xy = (i, v) => [
+      pad + (i / (points.length - 1)) * (w - pad * 2),
+      h - pad - ((v - min) / range) * (h - pad * 2)
+    ];
+
+    const up = values[values.length - 1] >= values[0];
+    ctx.strokeStyle = up ? '#4fd68c' : '#ec6f5e';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    points.forEach((p, i) => {
+      const [x, y] = xy(i, p.equity);
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+
+    // fill under the line, faint
+    const [firstX, firstY] = xy(0, points[0].equity);
+    const [lastX] = xy(points.length - 1, points[points.length - 1].equity);
+    ctx.lineTo(lastX, h - pad);
+    ctx.lineTo(firstX, h - pad);
+    ctx.closePath();
+    ctx.fillStyle = up ? 'rgba(79,214,140,0.08)' : 'rgba(236,111,94,0.08)';
+    ctx.fill();
+  } catch (e) {
+    canvas.style.display = 'none';
+    emptyMsg.style.display = 'block';
+    emptyMsg.textContent = 'Chart unavailable — connection error';
+  }
+}
+
+refresh();
+drawEquityChart();
+setInterval(refresh, 5000);
+setInterval(drawEquityChart, 15000);
+</script>
+
+</body>
+</html>

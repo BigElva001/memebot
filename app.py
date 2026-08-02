@@ -3,9 +3,10 @@ Web dashboard for the paper-trading bot.
 
 Runs the same scan/signal/portfolio logic as bot.py in a background
 thread, and serves a live-updating web page. Also exposes manual
-buy/sell endpoints so you (or friends testing it) can trade by hand
-against the same demo balance, on top of whatever the automatic
-scanner does.
+buy/sell endpoints (with a user-chosen trade size and optional custom
+stop-loss/take-profit limits) plus a live price-chart lookup, so you
+(or friends testing it) can trade by hand against the same demo
+balance, on top of whatever the automatic scanner does.
 
 100% paper/demo mode. No private key is ever read or needed here.
 """
@@ -84,6 +85,8 @@ def api_state():
                     "mint": p.mint,
                     "entry_price_usd": p.entry_price_usd,
                     "size_usd": p.size_usd,
+                    "stop_loss_pct": p.stop_loss_pct if p.stop_loss_pct is not None else config.STOP_LOSS_PCT,
+                    "take_profit_pct": p.take_profit_pct if p.take_profit_pct is not None else config.TAKE_PROFIT_PCT,
                 }
                 for p in pf.positions.values()
             ],
@@ -101,12 +104,34 @@ def api_state():
     })
 
 
+def _safe_pct(value, default_frac):
+    """Convert a user-supplied percent (e.g. 15 for 15%) to a fraction.
+    Falls back to None (meaning: use global default) if not provided or invalid."""
+    if value in (None, "", "null"):
+        return None
+    try:
+        pct = float(value)
+    except (TypeError, ValueError):
+        return None
+    if pct <= 0 or pct > 95:
+        return None
+    return pct / 100.0
+
+
 @app.route("/api/manual_buy", methods=["POST"])
 def manual_buy():
     data = request.get_json(force=True) or {}
     mint = (data.get("mint") or "").strip()
     if not mint:
         return jsonify({"ok": False, "error": "no token address provided"}), 400
+
+    try:
+        amount_usd = float(data.get("amount_usd", config.POSITION_SIZE_USD))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "invalid amount"}), 400
+
+    stop_loss_pct = _safe_pct(data.get("stop_loss_pct"), config.STOP_LOSS_PCT)
+    take_profit_pct = _safe_pct(data.get("take_profit_pct"), config.TAKE_PROFIT_PCT)
 
     pair = get_pair_data(mint)
     if not pair:
@@ -116,7 +141,12 @@ def manual_buy():
     price_usd = float(pair.get("priceUsd", 0) or 0)
     last_known_prices[symbol] = price_usd
 
-    ok, reason = pf.open_position(symbol, mint, price_usd, "manual buy")
+    ok, reason = pf.open_position(
+        symbol, mint, price_usd, "manual buy",
+        size_usd=amount_usd,
+        stop_loss_pct=stop_loss_pct,
+        take_profit_pct=take_profit_pct,
+    )
     return jsonify({"ok": ok, "reason": reason, "symbol": symbol, "price_usd": price_usd})
 
 
@@ -137,6 +167,29 @@ def manual_sell():
 
     ok, reason = pf.close_position_manual(symbol, price_usd)
     return jsonify({"ok": ok, "reason": reason, "symbol": symbol, "price_usd": price_usd})
+
+
+@app.route("/api/chart")
+def api_chart():
+    """Returns an embeddable DexScreener chart URL for a given mint."""
+    mint = (request.args.get("mint") or "").strip()
+    if not mint:
+        return jsonify({"ok": False, "error": "no token address provided"}), 400
+
+    pair = get_pair_data(mint)
+    if not pair or not pair.get("url"):
+        return jsonify({"ok": False, "error": "chart not available for that token"}), 404
+
+    embed_url = pair["url"] + "?embed=1&theme=dark&trades=0&info=0"
+    symbol = (pair.get("baseToken") or {}).get("symbol", mint[:6])
+    return jsonify({"ok": True, "embed_url": embed_url, "symbol": symbol})
+
+
+@app.route("/api/equity_history")
+def api_equity_history():
+    """Portfolio total value (cash + open positions) over time, for the
+    overall performance chart."""
+    return jsonify({"history": pf.equity_history})
 
 
 if __name__ == "__main__":

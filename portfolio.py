@@ -3,16 +3,16 @@ Tracks open positions, enforces every risk cap in config.py, and logs
 every trade to CSV so you can actually evaluate whether the strategy
 works before ever touching live funds.
 
-Also tracks a demo cash balance (starts at config.STARTING_BALANCE_SOL
-worth of USD) so buys/sells actually draw down and replenish a
-balance, like a real (paper) wallet.
+Tracks a demo cash balance (starts at config.STARTING_BALANCE_SOL
+worth of USD), an equity-over-time history for charting, and supports
+per-position custom stop-loss/take-profit limits set at buy time.
 """
 
 import json
 import csv
 import os
 import time
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 
 import config
 
@@ -25,6 +25,8 @@ class Position:
     size_usd: float
     tokens: float
     opened_at: float
+    stop_loss_pct: float = None   # None = use config default
+    take_profit_pct: float = None
 
 
 class Portfolio:
@@ -33,19 +35,17 @@ class Portfolio:
         self.positions: dict[str, Position] = {}
         self.realized_pnl_today = 0.0
         self.today = time.strftime("%Y-%m-%d")
+        self.equity_history = []  # [{"t": unix_ts, "equity": usd}, ...]
 
-        # Fallback SOL price if a live price couldn't be fetched at
-        # startup - only affects the initial balance conversion, not
-        # anything trade-related.
         fallback_price = sol_price_usd if sol_price_usd else 150.0
         self.starting_balance_usd = config.STARTING_BALANCE_SOL * fallback_price
         self.cash_balance_usd = self.starting_balance_usd
 
-        self._load(fallback_price)
+        self._load()
         self._ensure_trade_log()
 
     # ── persistence ──────────────────────────────────────────────
-    def _load(self, fallback_price: float):
+    def _load(self):
         if os.path.exists(config.STATE_FILE):
             with open(config.STATE_FILE) as f:
                 data = json.load(f)
@@ -58,6 +58,7 @@ class Portfolio:
             self.cash_balance_usd = data.get(
                 "cash_balance_usd", self.starting_balance_usd
             )
+            self.equity_history = data.get("equity_history", [])
             if data.get("date") == self.today:
                 self.realized_pnl_today = data.get("realized_pnl_today", 0.0)
         self._save()
@@ -70,6 +71,7 @@ class Portfolio:
                     "realized_pnl_today": self.realized_pnl_today,
                     "starting_balance_usd": self.starting_balance_usd,
                     "cash_balance_usd": self.cash_balance_usd,
+                    "equity_history": self.equity_history[-500:],
                     "date": self.today,
                 },
                 f,
@@ -105,12 +107,23 @@ class Portfolio:
             return False, f"max open positions reached ({config.MAX_OPEN_POSITIONS})"
         if self.realized_pnl_today <= -abs(config.MAX_DAILY_LOSS_USD):
             return False, f"daily loss limit hit (${config.MAX_DAILY_LOSS_USD}) — halted for today"
+        if size_usd <= 0:
+            return False, "trade amount must be greater than $0"
         if size_usd > self.cash_balance_usd:
             return False, f"insufficient balance (${self.cash_balance_usd:.2f} available, need ${size_usd:.2f})"
         return True, ""
 
     # ── actions ──────────────────────────────────────────────────
-    def open_position(self, symbol: str, mint: str, price_usd: float, reason: str, size_usd: float = None):
+    def open_position(
+        self,
+        symbol: str,
+        mint: str,
+        price_usd: float,
+        reason: str,
+        size_usd: float = None,
+        stop_loss_pct: float = None,
+        take_profit_pct: float = None,
+    ):
         size_usd = size_usd if size_usd is not None else config.POSITION_SIZE_USD
         ok, why = self.can_open_new_position(size_usd)
         if not ok:
@@ -130,6 +143,8 @@ class Portfolio:
             size_usd=size_usd,
             tokens=tokens,
             opened_at=time.time(),
+            stop_loss_pct=stop_loss_pct,
+            take_profit_pct=take_profit_pct,
         )
         self.cash_balance_usd -= size_usd
         self._save()
@@ -138,7 +153,9 @@ class Portfolio:
         return True, "opened"
 
     def check_exits(self, current_prices: dict):
-        """current_prices: {symbol: price_usd}. Call every loop iteration."""
+        """current_prices: {symbol: price_usd}. Call every loop iteration.
+        Uses each position's own stop-loss/take-profit if set at buy time,
+        otherwise falls back to the global config defaults."""
         for symbol in list(self.positions.keys()):
             pos = self.positions[symbol]
             price = current_prices.get(symbol)
@@ -146,10 +163,13 @@ class Portfolio:
                 continue
             change_pct = (price - pos.entry_price_usd) / pos.entry_price_usd
 
-            if change_pct <= -config.STOP_LOSS_PCT:
-                self._close_position(symbol, price, "stop-loss hit")
-            elif change_pct >= config.TAKE_PROFIT_PCT:
-                self._close_position(symbol, price, "take-profit hit")
+            sl = pos.stop_loss_pct if pos.stop_loss_pct is not None else config.STOP_LOSS_PCT
+            tp = pos.take_profit_pct if pos.take_profit_pct is not None else config.TAKE_PROFIT_PCT
+
+            if change_pct <= -sl:
+                self._close_position(symbol, price, f"stop-loss hit (-{sl*100:.0f}%)")
+            elif change_pct >= tp:
+                self._close_position(symbol, price, f"take-profit hit (+{tp*100:.0f}%)")
 
     def close_position_manual(self, symbol: str, price_usd: float) -> tuple[bool, str]:
         """Public entry point for a user-initiated (manual) sell."""
@@ -179,6 +199,13 @@ class Portfolio:
             for s, p in self.positions.items()
         )
         return self.cash_balance_usd + positions_value
+
+    def record_equity_point(self, current_prices: dict = None):
+        """Call once per scan cycle to build the equity chart history."""
+        equity = self.total_equity_usd(current_prices)
+        self.equity_history.append({"t": time.time(), "equity": round(equity, 2)})
+        self.equity_history = self.equity_history[-500:]
+        self._save()
 
     def summary(self) -> str:
         lines = [

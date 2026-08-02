@@ -133,6 +133,7 @@ def run_cycle(scanner: XScanner, watcher: WalletWatcher, jup: JupiterClient, pf:
 
     # 5. check exits on existing positions
     pf.check_exits(current_prices)
+    pf.record_equity_point(current_prices)
 
     print(pf.summary())
 
@@ -151,7 +152,11 @@ def main():
     scanner = XScanner()
     watcher = WalletWatcher()
     jup = JupiterClient()
-    pf = Portfolio()
+    try:
+        sol_price = jup._get_sol_price_usd()
+    except Exception:
+        sol_price = None
+    pf = Portfolio(sol_price_usd=sol_price)
 
     while True:
         try:
