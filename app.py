@@ -53,6 +53,21 @@ pf = Portfolio(sol_price_usd=_sol_price)
 status = {"last_run": None, "last_error": None, "cycle_count": 0}
 last_known_prices = {}
 
+# IMPORTANT: gunicorn (used in production/Render) imports this file as a
+# module - it never runs the `if __name__ == "__main__":` block below.
+# Background threads have to be started here, at import time, or the
+# scanner and the stop-loss/take-profit watcher silently never run.
+_threads_started = False
+
+
+def _start_background_threads():
+    global _threads_started
+    if _threads_started:
+        return
+    _threads_started = True
+    threading.Thread(target=background_loop, daemon=True).start()
+    threading.Thread(target=user_positions_watch_loop, daemon=True).start()
+
 
 def get_user_portfolio(username: str) -> Portfolio:
     """A fresh Portfolio backed by that user's own state file. Cheap to
@@ -75,6 +90,46 @@ def background_loop():
         except Exception as e:
             status["last_error"] = str(e)
         status["cycle_count"] += 1
+        time.sleep(config.POLL_INTERVAL_SEC)
+
+
+def list_user_accounts() -> list:
+    """Usernames that have a saved portfolio file, i.e. everyone who's
+    ever logged in - not just currently-connected browser sessions."""
+    if not os.path.isdir("state"):
+        return []
+    usernames = []
+    for fname in os.listdir("state"):
+        if fname.startswith("user_") and fname.endswith("_portfolio.json"):
+            usernames.append(fname[len("user_"):-len("_portfolio.json")])
+    return usernames
+
+
+def user_positions_watch_loop():
+    """Personal accounts don't go through bot.py's scan loop, so nothing
+    else checks their stop-loss/take-profit. This loop periodically
+    re-prices every open position across every user account and closes
+    any that have hit their limit - this is what actually makes SL/TP
+    work for manual trades."""
+    while True:
+        try:
+            for username in list_user_accounts():
+                my_pf = get_user_portfolio(username)
+                if not my_pf.positions:
+                    continue
+
+                current_prices = {}
+                for symbol, pos in my_pf.positions.items():
+                    pair = get_pair_data(pos.mint)
+                    if pair:
+                        price = float(pair.get("priceUsd", 0) or 0)
+                        if price:
+                            current_prices[symbol] = price
+
+                my_pf.check_exits(current_prices)
+                my_pf.record_equity_point(current_prices)
+        except Exception as e:
+            print(f"[WARN] user_positions_watch_loop error: {e}")
         time.sleep(config.POLL_INTERVAL_SEC)
 
 
@@ -207,14 +262,19 @@ def api_my_equity_history():
 
 def _safe_pct(value, default_frac):
     """Convert a user-supplied percent (e.g. 15 for 15%) to a fraction.
-    Falls back to None (meaning: use global default) if not provided or invalid."""
+    - Not provided / blank -> None (caller falls back to the global default)
+    - 0 -> 0.0 (explicitly disabled - no stop-loss/take-profit at all)
+    - Invalid or out of range -> None (falls back to default, safer than silently disabling)
+    """
     if value in (None, "", "null"):
         return None
     try:
         pct = float(value)
     except (TypeError, ValueError):
         return None
-    if pct <= 0 or pct > 95:
+    if pct == 0:
+        return 0.0
+    if pct < 0 or pct > 95:
         return None
     return pct / 100.0
 
@@ -298,6 +358,9 @@ def api_chart():
 
 
 if __name__ == "__main__":
-    t = threading.Thread(target=background_loop, daemon=True)
-    t.start()
+    _start_background_threads()
     app.run(host="0.0.0.0", port=5000)
+else:
+    # Imported by gunicorn (production) - start the background threads
+    # here since __main__ never runs under gunicorn.
+    _start_background_threads()
