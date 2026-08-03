@@ -30,8 +30,14 @@ class Position:
 
 
 class Portfolio:
-    def __init__(self, sol_price_usd: float = None):
-        os.makedirs(os.path.dirname(config.STATE_FILE), exist_ok=True)
+    def __init__(self, sol_price_usd: float = None, state_file: str = None, trade_log_file: str = None):
+        # Defaults to the single shared bot account (config.STATE_FILE).
+        # Pass state_file/trade_log_file explicitly to give a user their
+        # own separate, persistent paper-trading account.
+        self.state_file = state_file or config.STATE_FILE
+        self.trade_log_file = trade_log_file or config.TRADE_LOG_FILE
+
+        os.makedirs(os.path.dirname(self.state_file) or ".", exist_ok=True)
         self.positions: dict[str, Position] = {}
         self.realized_pnl_today = 0.0
         self.today = time.strftime("%Y-%m-%d")
@@ -46,8 +52,8 @@ class Portfolio:
 
     # ── persistence ──────────────────────────────────────────────
     def _load(self):
-        if os.path.exists(config.STATE_FILE):
-            with open(config.STATE_FILE) as f:
+        if os.path.exists(self.state_file):
+            with open(self.state_file) as f:
                 data = json.load(f)
             self.positions = {
                 k: Position(**v) for k, v in data.get("positions", {}).items()
@@ -64,7 +70,7 @@ class Portfolio:
         self._save()
 
     def _save(self):
-        with open(config.STATE_FILE, "w") as f:
+        with open(self.state_file, "w") as f:
             json.dump(
                 {
                     "positions": {k: asdict(v) for k, v in self.positions.items()},
@@ -79,14 +85,14 @@ class Portfolio:
             )
 
     def _ensure_trade_log(self):
-        if not os.path.exists(config.TRADE_LOG_FILE):
-            with open(config.TRADE_LOG_FILE, "w", newline="") as f:
+        if not os.path.exists(self.trade_log_file):
+            with open(self.trade_log_file, "w", newline="") as f:
                 csv.writer(f).writerow(
                     ["timestamp", "action", "symbol", "price_usd", "size_usd", "pnl_usd", "reason", "mode"]
                 )
 
     def _log_trade(self, action, symbol, price, size_usd, pnl_usd, reason):
-        with open(config.TRADE_LOG_FILE, "a", newline="") as f:
+        with open(self.trade_log_file, "a", newline="") as f:
             csv.writer(f).writerow(
                 [
                     time.strftime("%Y-%m-%d %H:%M:%S"),

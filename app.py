@@ -1,22 +1,26 @@
 """
 Web dashboard for the paper-trading bot.
 
-Runs the same scan/signal/portfolio logic as bot.py in a background
-thread, and serves a live-updating web page. Also exposes manual
-buy/sell endpoints (with a user-chosen trade size and optional custom
-stop-loss/take-profit limits) plus a live price-chart lookup, so you
-(or friends testing it) can trade by hand against the same demo
-balance, on top of whatever the automatic scanner does.
+Two things run side by side:
+  1. The automatic scanner (same as bot.py) - trades on its own
+     shared "bot" account, visible to everyone, no login needed.
+  2. Personal demo accounts - each friend logs in with a username +
+     password (created automatically on first login) and gets their
+     own persistent balance, positions, and trade history to test
+     manual buying/selling with custom amounts and limits. Logging
+     back in later shows exactly where they left off.
 
 100% paper/demo mode. No private key is ever read or needed here.
 """
 
+import os
 import threading
 import time
 
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template, jsonify, request, session, redirect, url_for
 
 import config
+import accounts
 from x_scanner import XScanner
 from wallet_watcher import WalletWatcher
 from jupiter_client import JupiterClient
@@ -24,6 +28,11 @@ from portfolio import Portfolio
 from bot import run_cycle, get_pair_data
 
 app = Flask(__name__)
+
+# Sessions need a secret key to sign cookies. Set SESSION_SECRET as an
+# env var on Render so logins survive a restart/redeploy; otherwise a
+# random one is generated each boot and everyone gets logged out.
+app.secret_key = os.environ.get("SESSION_SECRET") or os.urandom(24).hex()
 
 # Force paper mode no matter what config.py says - this dashboard is
 # for demo/testing only.
@@ -38,10 +47,23 @@ try:
 except Exception:
     _sol_price = None
 
+# Shared automatic-bot account (unauthenticated, visible to everyone).
 pf = Portfolio(sol_price_usd=_sol_price)
 
 status = {"last_run": None, "last_error": None, "cycle_count": 0}
 last_known_prices = {}
+
+
+def get_user_portfolio(username: str) -> Portfolio:
+    """A fresh Portfolio backed by that user's own state file. Cheap to
+    build (small JSON read) so we just construct one per request rather
+    than holding N portfolios in memory."""
+    safe = accounts.normalize_username(username)
+    return Portfolio(
+        sol_price_usd=_sol_price,
+        state_file=f"state/user_{safe}_portfolio.json",
+        trade_log_file=f"state/user_{safe}_trades.csv",
+    )
 
 
 def background_loop():
@@ -56,11 +78,32 @@ def background_loop():
         time.sleep(config.POLL_INTERVAL_SEC)
 
 
+# ── auth ─────────────────────────────────────────────────────────────
+@app.route("/api/login", methods=["POST"])
+def api_login():
+    data = request.get_json(force=True) or {}
+    username = data.get("username", "")
+    password = data.get("password", "")
+    ok, message = accounts.register_or_login(username, password)
+    if ok:
+        session["username"] = accounts.normalize_username(username)
+        return jsonify({"ok": True, "username": session["username"], "message": message})
+    return jsonify({"ok": False, "error": message}), 400
+
+
+@app.route("/api/logout", methods=["POST"])
+def api_logout():
+    session.pop("username", None)
+    return jsonify({"ok": True})
+
+
+# ── pages ────────────────────────────────────────────────────────────
 @app.route("/")
 def index():
-    return render_template("dashboard.html")
+    return render_template("dashboard.html", username=session.get("username"))
 
 
+# ── shared bot state (unauthenticated) ─────────────────────────────
 @app.route("/api/state")
 def api_state():
     import csv
@@ -74,6 +117,7 @@ def api_state():
     return jsonify({
         "mode": "PAPER (demo funds only)",
         "status": status,
+        "username": session.get("username"),
         "portfolio": {
             "cash_balance_usd": pf.cash_balance_usd,
             "starting_balance_usd": pf.starting_balance_usd,
@@ -104,6 +148,63 @@ def api_state():
     })
 
 
+@app.route("/api/equity_history")
+def api_equity_history():
+    """Shared bot's total value over time."""
+    return jsonify({"history": pf.equity_history})
+
+
+# ── personal account state (requires login) ────────────────────────
+@app.route("/api/my_state")
+def api_my_state():
+    username = session.get("username")
+    if not username:
+        return jsonify({"ok": False, "error": "not logged in"}), 401
+
+    my_pf = get_user_portfolio(username)
+    import csv
+    trades = []
+    try:
+        with open(my_pf.trade_log_file) as f:
+            trades = list(csv.DictReader(f))[-50:][::-1]
+    except FileNotFoundError:
+        pass
+
+    return jsonify({
+        "ok": True,
+        "username": username,
+        "portfolio": {
+            "cash_balance_usd": my_pf.cash_balance_usd,
+            "starting_balance_usd": my_pf.starting_balance_usd,
+            "total_equity_usd": my_pf.total_equity_usd(last_known_prices),
+            "open_positions": [
+                {
+                    "symbol": p.symbol,
+                    "mint": p.mint,
+                    "entry_price_usd": p.entry_price_usd,
+                    "size_usd": p.size_usd,
+                    "stop_loss_pct": p.stop_loss_pct if p.stop_loss_pct is not None else config.STOP_LOSS_PCT,
+                    "take_profit_pct": p.take_profit_pct if p.take_profit_pct is not None else config.TAKE_PROFIT_PCT,
+                }
+                for p in my_pf.positions.values()
+            ],
+            "realized_pnl_today": my_pf.realized_pnl_today,
+            "max_open_positions": config.MAX_OPEN_POSITIONS,
+            "max_daily_loss": config.MAX_DAILY_LOSS_USD,
+        },
+        "recent_trades": trades,
+    })
+
+
+@app.route("/api/my_equity_history")
+def api_my_equity_history():
+    username = session.get("username")
+    if not username:
+        return jsonify({"ok": False, "error": "not logged in"}), 401
+    my_pf = get_user_portfolio(username)
+    return jsonify({"history": my_pf.equity_history})
+
+
 def _safe_pct(value, default_frac):
     """Convert a user-supplied percent (e.g. 15 for 15%) to a fraction.
     Falls back to None (meaning: use global default) if not provided or invalid."""
@@ -120,6 +221,10 @@ def _safe_pct(value, default_frac):
 
 @app.route("/api/manual_buy", methods=["POST"])
 def manual_buy():
+    username = session.get("username")
+    if not username:
+        return jsonify({"ok": False, "error": "log in first to trade on your own account"}), 401
+
     data = request.get_json(force=True) or {}
     mint = (data.get("mint") or "").strip()
     if not mint:
@@ -141,7 +246,8 @@ def manual_buy():
     price_usd = float(pair.get("priceUsd", 0) or 0)
     last_known_prices[symbol] = price_usd
 
-    ok, reason = pf.open_position(
+    my_pf = get_user_portfolio(username)
+    ok, reason = my_pf.open_position(
         symbol, mint, price_usd, "manual buy",
         size_usd=amount_usd,
         stop_loss_pct=stop_loss_pct,
@@ -152,12 +258,18 @@ def manual_buy():
 
 @app.route("/api/manual_sell", methods=["POST"])
 def manual_sell():
+    username = session.get("username")
+    if not username:
+        return jsonify({"ok": False, "error": "log in first to trade on your own account"}), 401
+
     data = request.get_json(force=True) or {}
     symbol = (data.get("symbol") or "").strip()
-    if not symbol or symbol not in pf.positions:
+
+    my_pf = get_user_portfolio(username)
+    if not symbol or symbol not in my_pf.positions:
         return jsonify({"ok": False, "error": "no open position for that symbol"}), 404
 
-    mint = pf.positions[symbol].mint
+    mint = my_pf.positions[symbol].mint
     pair = get_pair_data(mint)
     if not pair:
         return jsonify({"ok": False, "error": "couldn't fetch current price"}), 404
@@ -165,7 +277,7 @@ def manual_sell():
     price_usd = float(pair.get("priceUsd", 0) or 0)
     last_known_prices[symbol] = price_usd
 
-    ok, reason = pf.close_position_manual(symbol, price_usd)
+    ok, reason = my_pf.close_position_manual(symbol, price_usd)
     return jsonify({"ok": ok, "reason": reason, "symbol": symbol, "price_usd": price_usd})
 
 
@@ -183,13 +295,6 @@ def api_chart():
     embed_url = pair["url"] + "?embed=1&theme=dark&trades=0&info=0"
     symbol = (pair.get("baseToken") or {}).get("symbol", mint[:6])
     return jsonify({"ok": True, "embed_url": embed_url, "symbol": symbol})
-
-
-@app.route("/api/equity_history")
-def api_equity_history():
-    """Portfolio total value (cash + open positions) over time, for the
-    overall performance chart."""
-    return jsonify({"history": pf.equity_history})
 
 
 if __name__ == "__main__":
